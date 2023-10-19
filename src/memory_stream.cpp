@@ -11,8 +11,10 @@
 
 #include "memory_stream.h"
 #include <Arduino.h>
+#include <unity.h>
 
-uint16_t kTimedReadTimeout = 1000U;
+const uint16_t kTimedReadTimeout = 1000U;
+const char kStringEliminator = '\0';
 
 // Include string.h for memcpy
 #ifndef ARDUINO
@@ -33,37 +35,27 @@ void delay(int number_of_millis)
 /**
  * @brief Construct a new Memory Stream object
  *
- * @param buffersize is the size of the buffers that will be used
  * @param seperate_input_output_buffer bool if two buffers are used, one for input and one for output
- * @param use_multiple_outputs bool that is used to determine if multiple outputs are used
- * @param maximum_amount_of_outputs is the size of the buffer that will store the size of every output
+ * @param buffersize is the size of the buffers that will be used
+ * @param maximum_amount_of_entries is the size of the buffer that will store the size of every entrie (outputs and inputs)
  */
-MemoryStream::MemoryStream(uint8_t buffersize, bool seperate_input_output_buffer, bool use_multiple_outputs, uint8_t maximum_amount_of_outputs)
+MemoryStream::MemoryStream(bool seperate_input_output_buffer, uint8_t buffer_size, uint8_t maximum_amount_of_entries)
 {
-    this->buffer_size_ = buffersize;
-    this->main_buffer_ = new uint8_t[buffersize];
+    this->buffer_size_ = buffer_size;
+    this->main_buffer_ = new uint8_t[buffer_size_];
 
     this->use_two_buffers_ = seperate_input_output_buffer;
+
     if (this->use_two_buffers_)
     {
-        this->output_buffer_ = new uint8_t[buffersize];
+        this->maximum_amount_of_entries_ = maximum_amount_of_entries;
+        InitTwoBuffers_();
     }
     else
     {
         this->output_buffer_ = nullptr;
-    }
-
-    this->use_multiple_outputs_ = use_multiple_outputs;
-    this->output_index_ = 0;
-    this->output_amount_ = 0;
-    this->output_has_been_read = true;
-    if (this->use_multiple_outputs_)
-    {
-        this->output_sizes_buffer_ = new uint8_t[maximum_amount_of_outputs];
-    }
-    else
-    {
         this->output_sizes_buffer_ = nullptr;
+        this->maximum_amount_of_entries_ = 0;
     }
 
     this->write_cursor_ = 0;
@@ -71,17 +63,28 @@ MemoryStream::MemoryStream(uint8_t buffersize, bool seperate_input_output_buffer
     this->available_bytes_ = 0;
 }
 
+void MemoryStream::InitTwoBuffers_(void)
+{
+    this->output_buffer_ = new uint8_t[buffer_size_];
+
+    this->output_has_been_read = true;
+    this->output_sizes_buffer_ = new uint8_t[this->maximum_amount_of_entries_];
+    this->input_sizes_buffer_ = new uint8_t[this->maximum_amount_of_entries_];
+    this->output_cursor_ = 0;
+    this->input_cursor_ = 0;
+    this->output_amount_ = 0;
+    this->input_amount_ = 0;
+    this->last_write_cursor_index_ = 0;
+}
+
 MemoryStream::~MemoryStream()
 {
     delete[] this->main_buffer_;
-    if (this->output_buffer_ != nullptr)
+    if (this->use_two_buffers_)
     {
         delete[] this->output_buffer_;
-    }
-
-    if (this->output_sizes_buffer_ != nullptr)
-    {
         delete[] this->output_sizes_buffer_;
+        delete[] this->input_sizes_buffer_;
     }
 }
 
@@ -94,7 +97,7 @@ int MemoryStream::available()
     }
 
     // If no bytes are available check if multiple outputs are used
-    if (!use_multiple_outputs_)
+    if (!use_two_buffers_)
     {
         return 0;
     }
@@ -103,11 +106,12 @@ int MemoryStream::available()
     if (output_has_been_read)
     {
         // If there are more outputs defined then that have been read
-        if (output_amount_ - output_index_)
+        if (output_amount_)
         {
             // available bytes is not initialized yet so initialise it
-            available_bytes_ = output_sizes_buffer_[output_index_];
-            output_index_++;
+            available_bytes_ = output_sizes_buffer_[output_cursor_ % maximum_amount_of_entries_];
+            output_amount_--;
+            output_cursor_++;
             output_has_been_read = false;
             return available_bytes_;
         }
@@ -122,32 +126,107 @@ int MemoryStream::available()
     return 0;
 }
 
-void MemoryStream::AddOutput(const char *output, uint8_t size)
+int8_t MemoryStream::AddOutput(const char *output, uint8_t size)
 {
     // Check if multiple outputs are eneabled
-    if (!this->use_multiple_outputs_)
+    if (!this->use_two_buffers_)
     {
-        return;
+        return kUseTwoBuffersNotEnabled;
     }
 
     // Calculate the used size of buffer
     uint8_t used_size = 0;
     for (size_t i = 0; i < output_amount_; i++)
     {
-        used_size += output_sizes_buffer_[i];
+        used_size += output_sizes_buffer_[(output_cursor_ + i) % maximum_amount_of_entries_];
     }
 
     // Check if there is space for the new output
     if (buffer_size_ - used_size < size)
     {
-        return;
+        return kBufferOverflow;
     }
 
     // Add the new output to the list
+    int index = (output_cursor_ + output_amount_) % maximum_amount_of_entries_;
+    output_sizes_buffer_[index] = size;
     output_amount_++;
-    output_sizes_buffer_[output_amount_ - 1] = size;
+
+    // Calculate the amount of space in front of the current index
+    int remaining_space_in_back = buffer_size_ - (read_cursor_ + used_size);
+
     // Copy new data to output buffer in the correct location
-    memcpy(output_buffer_ + used_size, output, size);
+    if (size > remaining_space_in_back)
+    {
+        int space_needed_in_front = size - remaining_space_in_back;
+        memcpy((output_buffer_ + read_cursor_ + used_size), output, remaining_space_in_back);
+        memcpy(output_buffer_, (output + remaining_space_in_back), space_needed_in_front);
+    }
+    else
+    {
+        memcpy(output_buffer_ + read_cursor_ + used_size, output, size);
+    }
+
+    return kSucces;
+}
+
+int8_t MemoryStream::ReadInput(char *buffer, uint8_t buffer_size)
+{
+    // Check if multiple outputs are eneabled
+    if (!this->use_two_buffers_)
+    {
+        return kUseTwoBuffersNotEnabled;
+    }
+
+    // Flush so an entry is made of current amount of written characters
+    if (input_amount_ == 0)
+    {
+        flush();
+    }
+
+    // Calculate the used size of buffer
+    uint8_t used_size = 0;
+    for (size_t i = 1; i <= input_amount_; i++)
+    {
+        used_size += input_sizes_buffer_[(input_cursor_ - i) % maximum_amount_of_entries_];
+    }
+
+    if (used_size == 0)
+    {
+
+        memcpy(buffer, &kStringEliminator, 1);
+        return kSucces;
+    }
+
+    int index = (input_cursor_ - input_amount_) % maximum_amount_of_entries_;
+    int message_size = input_sizes_buffer_[index];
+
+    // Check if there is space for the new output
+    if (buffer_size < message_size)
+    {
+        return kBufferOverflow;
+    }
+
+    // Calculate the amount of space in front of the current index
+    int begin_of_messages = (write_cursor_ - used_size) % buffer_size_;
+
+    // Copy data from behind and infront of the cursor
+    if (begin_of_messages + message_size > buffer_size_)
+    {
+        int space_needed_from_start = begin_of_messages + message_size - buffer_size_;
+        memcpy(buffer, main_buffer_ + begin_of_messages, message_size - space_needed_from_start);
+        memcpy((buffer + message_size - space_needed_from_start), main_buffer_, space_needed_from_start);
+    }
+    else
+    {
+        memcpy(buffer, main_buffer_ + begin_of_messages, message_size);
+    }
+    memcpy(buffer + message_size, &kStringEliminator, 1);
+
+    // Note that first message has been read
+    input_amount_--;
+
+    return kSucces;
 }
 
 int MemoryStream::read()
@@ -206,6 +285,26 @@ size_t MemoryStream::write(uint8_t c)
 
 void MemoryStream::flush()
 {
+    if (use_two_buffers_)
+    {
+        // Check that message amount cant exceed maximum amount of entries
+        if (input_amount_ == maximum_amount_of_entries_ - 1)
+        {
+            return;
+        }
+
+        if (write_cursor_ == last_write_cursor_index_)
+        {
+            return;
+        }
+
+        // Note index of message end
+        input_sizes_buffer_[input_cursor_ % maximum_amount_of_entries_] = (write_cursor_ - last_write_cursor_index_) % buffer_size_;
+        last_write_cursor_index_ = write_cursor_;
+        input_amount_++;
+        input_cursor_++;
+    }
+
     return;
 }
 
@@ -214,7 +313,7 @@ uint8_t *MemoryStream::GetBuffer()
     return this->main_buffer_;
 }
 
-uint8_t *MemoryStream::GetSecondBuffer()
+uint8_t *MemoryStream::GetOutputBuffer()
 {
     return this->output_buffer_;
 }

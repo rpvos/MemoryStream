@@ -1,73 +1,129 @@
+#include <Arduino.h>
 #include <unity.h>
 #include "memory_stream.h"
-#include <Arduino.h>
 
 MemoryStream *stream;
 
-void test_available(void)
-{
-    // String used as output
-    String s = "Hello world!";
-    // Char used as output
-    char c = 'A';
+// String used as output
+const String kTestString = "Hello world!";
+// Char used as output
+const char kTestCharacter = 'A';
 
-    // Test default constructor
-    stream = new MemoryStream();
+void test_ReadInput(void)
+{
+    stream = new MemoryStream(true);
+
+    // Test one input
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->print(kTestString));
+    uint8_t buffer_size = 64;
+    char buffer[buffer_size];
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kSucces, stream->ReadInput(buffer, buffer_size));
+    TEST_ASSERT_EQUAL_STRING(kTestString.c_str(), buffer);
+
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->print(kTestString));
+    stream->flush();
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->print(kTestString));
+    stream->flush();
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kSucces, stream->ReadInput(buffer, buffer_size));
+    TEST_ASSERT_EQUAL_STRING(kTestString.c_str(), buffer);
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kSucces, stream->ReadInput(buffer, buffer_size));
+    TEST_ASSERT_EQUAL_STRING(kTestString.c_str(), buffer);
+
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kSucces, stream->ReadInput(buffer, buffer_size));
+    TEST_ASSERT_EQUAL_STRING("", buffer);
+}
+
+void test_AddOutput(void)
+{
+    uint8_t buffer_size = 64U;
+    stream = new MemoryStream(true, buffer_size);
+
+    // Fill buffer with 2 strings
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kSucces, stream->AddOutput(kTestString.c_str(), kTestString.length()));
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kSucces, stream->AddOutput(kTestString.c_str(), kTestString.length()));
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->available());
+    stream->readString();
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->available());
+    stream->readString();
     TEST_ASSERT_EQUAL_INT(0, stream->available());
-    stream->write(c);
+
+    // Test for edge case buffer overflow
+    char buffer_overflow[buffer_size];
+    for (uint8_t i = 0; i < buffer_size - 1; i++)
+    {
+        buffer_overflow[i] = ('A' + i);
+    }
+    buffer_overflow[buffer_size - 1] = '\0';
+
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kSucces, stream->AddOutput(buffer_overflow, buffer_size));
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kBufferOverflow, stream->AddOutput(buffer_overflow, buffer_size));
+
+    TEST_ASSERT_EQUAL_STRING(buffer_overflow, stream->readString().c_str());
+    TEST_ASSERT_EQUAL_STRING("", stream->readString().c_str());
+
+    stream->~MemoryStream();
+
+    // Test for edge case no two buffers
+    stream = new MemoryStream(false);
+    TEST_ASSERT_EQUAL_INT(MemoryStream::kUseTwoBuffersNotEnabled, stream->AddOutput(buffer_overflow, buffer_size));
+}
+
+void test_BasicFunctionsMultipleBuffers(void)
+{
+    // Test multiple buffers and outputs
+    stream = new MemoryStream(true);
+
+    // Test seperate buffer
+    // Buffer should not be filled when written to
+    TEST_ASSERT_EQUAL_INT(0, stream->available());
+    TEST_ASSERT_EQUAL_CHAR(-1, stream->peek());
+    memcpy(stream->GetOutputBuffer(), &kTestCharacter, sizeof(kTestCharacter));
+    stream->SetReadCursor(0);
+    stream->SetOutputLength(1);
+    TEST_ASSERT_EQUAL_CHAR(kTestCharacter, stream->peek());
     TEST_ASSERT_EQUAL_INT(1, stream->available());
     stream->read();
     TEST_ASSERT_EQUAL_INT(0, stream->available());
-    stream->print(s);
-    TEST_ASSERT_EQUAL_INT(s.length(), stream->available());
-    stream->readString();
-    TEST_ASSERT_EQUAL_INT(0, stream->available());
-    stream->~MemoryStream();
 
-    // Test seperate buffer
-    stream = new MemoryStream(64U, true);
-    // Buffer should not be filled when written to
-    TEST_ASSERT_EQUAL_INT(0, stream->available());
-    stream->write(c);
-    TEST_ASSERT_EQUAL_INT(0, stream->available());
-    stream->read();
-    TEST_ASSERT_EQUAL_INT(0, stream->available());
-    // Fill buffer
-    memcpy(stream->GetSecondBuffer(), s.c_str(), s.length());
-    stream->SetOutputLength(s.length());
+    // Test second buffer
+    memcpy(stream->GetOutputBuffer(), kTestString.c_str(), kTestString.length());
+    stream->SetReadCursor(0);
+    stream->SetOutputLength(kTestString.length());
 
     // Available should be equal to amount of letters in second buffer
-    TEST_ASSERT_EQUAL_INT(s.length(), stream->available());
-    stream->readString();
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->available());
+    TEST_ASSERT_EQUAL_STRING(kTestString.c_str(), stream->readString().c_str());
     TEST_ASSERT_EQUAL_INT(0, stream->available());
-    stream->~MemoryStream();
+}
 
-    // Test multiple outputs
-    stream = new MemoryStream(64U, true, true);
-    // Buffer should not be filled when written to
+/**
+ * @brief Test containing available, write, print, peek, read and read string functions
+ *
+ */
+void test_BasicFunctionsDefault(void)
+{
+    // Test default constructor
+    stream = new MemoryStream();
+    // No char is available
     TEST_ASSERT_EQUAL_INT(0, stream->available());
-    stream->write(c);
-    TEST_ASSERT_EQUAL_INT(0, stream->available());
+    TEST_ASSERT_EQUAL_CHAR(-1, stream->peek());
+    stream->write(kTestCharacter);
+    TEST_ASSERT_EQUAL_CHAR(kTestCharacter, stream->peek());
+    TEST_ASSERT_EQUAL_INT(1, stream->available());
     stream->read();
     TEST_ASSERT_EQUAL_INT(0, stream->available());
-    // Fill buffer with letters
-    stream->AddOutput(s.c_str(), s.length());
-
-    // Available should be equal to amount of letters in second buffer
-    TEST_ASSERT_EQUAL_INT(s.length(), stream->available());
-    stream->readString();
+    stream->print(kTestString);
+    stream->flush();
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->available());
+    TEST_ASSERT_EQUAL_STRING(kTestString.c_str(), stream->readString().c_str());
     TEST_ASSERT_EQUAL_INT(0, stream->available());
 
-    // Fill buffer with 2 strings
-    stream->AddOutput(s.c_str(), s.length());
-    stream->AddOutput(s.c_str(), s.length());
-    TEST_ASSERT_EQUAL_INT(s.length(), stream->available());
-    stream->readString();
-    TEST_ASSERT_EQUAL_INT(s.length(), stream->available());
-    stream->readString();
-    TEST_ASSERT_EQUAL_INT(0, stream->available());
-
-    stream->~MemoryStream();
+    // Test main buffer getter
+    memcpy(stream->GetBuffer(), kTestString.c_str(), kTestString.length());
+    stream->SetReadCursor(0);
+    stream->SetOutputLength(kTestString.length());
+    TEST_ASSERT_EQUAL_INT(kTestString.length(), stream->available());
+    TEST_ASSERT_EQUAL_STRING(kTestString.c_str(), stream->readString().c_str());
 }
 
 void setUp(void)
@@ -78,7 +134,8 @@ void tearDown(void)
 {
     if (stream != nullptr)
     {
-        stream->~MemoryStream();
+        delete stream;
+        stream = nullptr;
     }
 }
 
@@ -86,19 +143,13 @@ int RunAllTests(void)
 {
     UNITY_BEGIN(); // Start unit testing
 
-    RUN_TEST(test_available);
-    // RUN_TEST(test_read);
-    // RUN_TEST(test_peek);
-    // RUN_TEST(test_write);
-    // RUN_TEST(test_GetBuffer);
-    // RUN_TEST(test_GetSecondBuffer);
-    // RUN_TEST(test_AddOutput);
+    RUN_TEST(test_BasicFunctionsDefault);
+    RUN_TEST(test_BasicFunctionsMultipleBuffers);
+    RUN_TEST(test_AddOutput);
+    RUN_TEST(test_ReadInput);
 
     return UNITY_END(); // Stop unit testing
 }
-
-#ifdef ARDUINO
-#include <Arduino.h>
 
 /**
  * @brief Entry point to start all tests
@@ -121,25 +172,3 @@ void loop()
 {
     delay(2000);
 }
-#else
-#include <time.h>
-
-int main(void)
-{
-    return RunAllTests();
-}
-
-void delay(int number_of_seconds)
-{
-    // Converting time into milli_seconds
-    int milli_seconds = number_of_seconds;
-
-    // Storing start time
-    clock_t start_time = clock();
-
-    // looping till required time is not achieved
-    while (clock() < start_time + milli_seconds)
-        ;
-}
-
-#endif
