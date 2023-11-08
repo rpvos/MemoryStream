@@ -1,8 +1,8 @@
 /**
  * @file memory_stream.h
  * @author rpvos (mr.rv.asd@gmail.com)
- * @brief Library used to test max485ttl.cpp
- * @version 0.1
+ * @brief Library used to test embedded software without making a mockup
+ * @version 1.0
  * @date 2023-09-20
  *
  * @copyright Copyright (c) 2023

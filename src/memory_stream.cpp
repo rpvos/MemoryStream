@@ -1,8 +1,8 @@
 /**
  * @file memory_stream.cpp
  * @author rpvos (mr.rv.asd@gmail.com)
- * @brief Library used to test max485ttl.cpp
- * @version 0.1
+ * @brief Library used to test arduino projects
+ * @version 1.0
  * @date 2023-09-20
  *
  * @copyright Copyright (c) 2023
@@ -15,22 +15,6 @@
 
 const uint16_t kTimedReadTimeout = 1000U;
 const char kStringEliminator = '\0';
-
-// Include string.h for memcpy
-#ifndef ARDUINO
-#include <string.h>
-
-void delay(int number_of_millis)
-{
-
-    // Storing start time
-    clock_t start_time = clock();
-
-    // looping till required time is not achieved
-    while (clock() < start_time + number_of_millis)
-        ;
-}
-#endif
 
 /**
  * @brief Construct a new Memory Stream object
