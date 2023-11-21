@@ -11,7 +11,6 @@
 
 #include "memory_stream.h"
 #include <Arduino.h>
-#include <unity.h>
 
 const uint16_t kTimedReadTimeout = 1000U;
 const char kStringEliminator = '\0';
